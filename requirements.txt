@@ -1,0 +1,16 @@
+# .venv\Scripts\activate
+# py -m pip install -r requirements.txt                                       
+numpy
+pandas
+matplotlib
+openpyxl
+#scikit-image
+#opencv-python
+#opencv-contrib-python
+#scipy
+scikit-learn
+#tqdm
+seaborn
+xlrd
+scikit-posthocs
+factor_analyzer
