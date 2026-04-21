@@ -14,6 +14,7 @@ from sklearn.cluster import KMeans
 from scipy.stats import spearmanr
 from factor_analyzer.factor_analyzer import calculate_kmo, calculate_bartlett_sphericity
 from sklearn.metrics import silhouette_score
+from scipy.stats import spearmanr
 
 
 
@@ -325,6 +326,7 @@ W_percentile = pd.Series(W_raw).rank(pct=True)
 df_level = df.loc[X_level.index].copy()
 df_level["W_percentile"] = W_percentile
 
+
 # klasy poziomu
 def interpret_level(x):
     if x < 0.25:
@@ -340,6 +342,25 @@ df_level["poziom"] = df_level["W_percentile"].apply(interpret_level)
 
 print("\nRozkład poziomów:")
 print(df_level["poziom"].value_counts())
+
+# =========================
+# STEP 2 B AUTO-WAGI (PCA + korelacje)
+# =========================
+
+# PCA loadings (bezwzględne)
+weights_pca = loadings.abs()
+
+# korelacje z PC1
+corr = df_level[features + ["W_percentile"]].corr()["W_percentile"].drop("W_percentile").abs()
+
+# połączenie (średnia)
+weights = (weights_pca + corr) / 2
+
+# normalizacja do sumy = 1
+weights = weights / weights.sum()
+
+print("\n=== AUTO WAGI ===")
+print(weights.sort_values(ascending=False))
 
 
 # =========================================
@@ -378,6 +399,9 @@ for col in X_fuzzy.columns:
     X_fuzzy[col] = (X_fuzzy[col] - q1) / (q9 - q1)
     X_fuzzy[col] = X_fuzzy[col].clip(0, 1)
 
+print("\n=== ROZKŁAD X_fuzzy ===")
+print(X_fuzzy.describe())
+
 # =========================
 # MEMBERSHIP FUNCTIONS
 # =========================
@@ -389,88 +413,132 @@ for col in X_fuzzy.columns:
 
     fuzzy_inputs[col] = {
         "low": trapmf(x, 0.0, 0.0, 0.2, 0.4),
-        "medium": trimf(x, 0.2, 0.5, 0.8),
-        "high": trapmf(x, 0.6, 0.8, 1.0, 1.0)
+        "medium": trimf(x, 0.3, 0.5, 0.7),
+        "high": trapmf(x, 0.4, 0.6, 1.0, 1.0)
     }
 
+print("\nDEBUG membership:")
+print("stres high mean:", fuzzy_inputs["stres"]["high"].mean())
+print("zmeczenie high mean:", fuzzy_inputs["zmeczenie"]["high"].mean())
+print("kondycja low mean:", fuzzy_inputs["kondycja"]["low"].mean())
+
 # wzmocnienie osi psychicznej
-fuzzy_inputs["stres"]["high"] = np.clip(fuzzy_inputs["stres"]["high"] * 1.2, 0, 1)
-fuzzy_inputs["zmeczenie"]["high"] = np.clip(fuzzy_inputs["zmeczenie"]["high"] * 1.2, 0, 1)
+fuzzy_inputs["stres"]["high"] = np.clip(fuzzy_inputs["stres"]["high"] * 1.5, 0, 1)
+fuzzy_inputs["zmeczenie"]["high"] = np.clip(fuzzy_inputs["zmeczenie"]["high"] * 1.5, 0, 1)
 
-# =========================
-# REGUŁY (SPÓJNE!)
-# =========================
+def compute_W_fuzzy(weights, alpha):
 
-rules = []
+    W = []
 
-# 🔴 CORE — najważniejsze (PCA: stres + zmęczenie)
-rules.append(("high", np.sqrt(
-    fuzzy_inputs["stres"]["high"] *
-    fuzzy_inputs["zmeczenie"]["high"]
-)))
+    for i in range(len(X_fuzzy)):
 
-# 🔴 PRZECIĄŻENIE FIZYCZNE
-rules.append(("high", fuzzy_inputs["ciezkosc_pracy"]["high"]))
+        # =========================
+        # 🔵 BLOK MENTALNY (KLUCZ!)
+        # =========================
 
-# 🟡 ŚREDNIE
-rules.append(("medium", np.sqrt(
-    fuzzy_inputs["zmeczenie"]["medium"] *
-    fuzzy_inputs["halas"]["medium"]
-)))
+        stres_h = fuzzy_inputs["stres"]["high"].iloc[i]
+        zmeczenie_h = fuzzy_inputs["zmeczenie"]["high"].iloc[i]
+        kondycja_l = fuzzy_inputs["kondycja"]["low"].iloc[i]
 
-# 🟢 OCHRONA
-rules.append(("low", np.sqrt(
-    fuzzy_inputs["kondycja"]["high"] *
-    fuzzy_inputs["stres"]["low"]
-)))
+        # 🔴 SYNERGIA (KLUCZ!)
+        synergy = stres_h * zmeczenie_h
 
-# ⚪ FALLBACK (słaby!)
-rules.append(("medium", 0.3 * np.maximum.reduce([
-    fuzzy_inputs["stres"]["low"],
-    fuzzy_inputs["zmeczenie"]["low"],
-    fuzzy_inputs["kondycja"]["medium"]
-])))
+        mental = (
+            weights["stres"] * stres_h +
+            weights["zmeczenie"] * zmeczenie_h +
+            weights["kondycja"] * kondycja_l +
+            2.0 * synergy
+        )
 
-# 🔴 DODATKOWE (ważne!)
-rules.append(("high", 0.5 * np.sqrt(
-    fuzzy_inputs["kondycja"]["low"] *
-    fuzzy_inputs["zmeczenie"]["high"]
-)))
+        # =========================
+        # 🟠 BLOK FIZYCZNY (słabszy)
+        # =========================
 
-# =========================
-# DEFUZYFIKACJA PER OSOBA
-# =========================
+        physical = (
+            0.7 * fuzzy_inputs["ciezkosc_pracy"]["high"].iloc[i] +
+            0.3 * fuzzy_inputs["halas"]["high"].iloc[i]
+        )
 
-W_fuzzy_individual = []
+        # =========================
+        # 🔴 FINALNA KOMBINACJA
+        # =========================
 
-for i in range(len(X_fuzzy)):
+        val = np.power(0.9 * mental + 0.1 * physical, 1.8)
 
-    numerator = 0
-    denominator = 0
+        if synergy > 0.5:
+            val += 0.3
 
-    for label, strength in rules:
+        W.append(val)
 
-        s = np.asarray(strength)[i]
+    return np.array(W)
 
-        if label == "low":
-            value = 0.3 * s
-        elif label == "medium":
-            value = 0.5 * s
-        elif label == "high":
-            value = 0.9 * s
 
-        numerator += value
-        denominator += s
+alphas = np.linspace(0.1, 2.0, 20)
 
-    if denominator == 0:
-        W_fuzzy_individual.append(0)
+results = []
+weights_dict = weights.to_dict()
+
+for a in alphas:
+    W_tmp = compute_W_fuzzy(weights_dict, a)
+
+    # dopasuj indeksy!
+    df_tmp = df_level.copy()
+    df_tmp["W_tmp"] = W_tmp
+
+    valid = df_tmp[["W_tmp", "W_percentile"]].dropna()
+
+    if len(valid) > 0:
+        rho, _ = spearmanr(valid["W_tmp"], valid["W_percentile"])
     else:
-        W_fuzzy_individual.append(numerator / denominator)
+        rho = 0
 
-df_level["W_fuzzy"] = W_fuzzy_individual
+    results.append((a, rho))
 
-print("\nPodsumowanie W_fuzzy:")
-print(df_level["W_fuzzy"].describe())
+results_df = pd.DataFrame(results, columns=["alpha", "rho"])
+
+print("\n=== TUNING ALPHA ===")
+print(results_df.sort_values("rho", ascending=False).head())
+
+best_alpha = results_df.sort_values("rho", ascending=False).iloc[0]["alpha"]
+
+print("\nBEST ALPHA:", best_alpha)
+
+print("\n=== KOLUMNY df_level ===")
+for col in df_level.columns:
+    print(col)
+
+best_rho = -1
+best_w = None
+
+for _ in range(500):
+
+    w = np.random.rand(len(features))
+    w = w / w.sum()
+
+    weights_tmp = dict(zip(features, w))
+
+    W_tmp = compute_W_fuzzy(weights_tmp, best_alpha)
+
+    df_tmp = df_level.copy()
+    df_tmp["W_tmp"] = W_tmp
+
+    valid = df_tmp[["W_tmp", "W_percentile"]].dropna()
+
+    rho, _ = spearmanr(valid["W_tmp"], valid["W_percentile"])
+
+    if rho > best_rho:
+        best_rho = rho
+        best_w = weights_tmp
+
+print("\n=== BEST FUZZY (vs PCA) ===")
+print("rho:", best_rho)
+print("weights:", best_w)
+
+# finalny model
+
+W_fuzzy_final = compute_W_fuzzy(best_w, best_alpha)
+df_level["W_fuzzy"] = W_fuzzy_final
+df_level["W_fuzzy_pct"] = pd.Series(W_fuzzy_final).rank(pct=True)
 
 
 # =========================================
@@ -478,17 +546,17 @@ print(df_level["W_fuzzy"].describe())
 # =========================================
 
 print("\n=== PCA vs FUZZY ===")
-print(df_level[["W_percentile", "W_fuzzy"]].corr())
+print(df_level[["W_percentile", "W_fuzzy_pct"]].corr())
 
 print("\nW_fuzzy vs klastry:")
-print(df_struct.join(df_level["W_fuzzy"]).groupby("cluster")["W_fuzzy"].mean())
+print(df_struct.join(df_level["W_fuzzy_pct"]).groupby("cluster")["W_fuzzy_pct"].mean())
 
 # =========================================
 # KONTROLA STRUKTURY KLASTRÓW (TU!)
 # =========================================
 
 df_check = df_struct.join(
-    df_level[["W_percentile","W_fuzzy"]]
+    df_level[["W_percentile","W_fuzzy_pct"]]
 )
 
 print("\n=== KONTROLA KLASTRÓW ===")
@@ -497,10 +565,10 @@ print("\nStres / zmęczenie / kondycja:")
 print(df_check.groupby("cluster")[["stres","zmeczenie","kondycja"]].mean())
 
 print("\nPCA vs fuzzy w klastrach:")
-print(df_check.groupby("cluster")[["W_percentile","W_fuzzy"]].mean())
+print(df_check.groupby("cluster")[["W_percentile","W_fuzzy_pct"]].mean())
 
 print("\nRóżnica fuzzy - PCA:")
-df_check["diff"] = df_check["W_fuzzy"] - df_check["W_percentile"]
+df_check["diff"] = df_check["W_fuzzy_pct"] - df_check["W_percentile"]
 print(df_check.groupby("cluster")["diff"].mean())
 
 # =========================================
@@ -648,7 +716,7 @@ sns.pointplot(
     hue="typ_wskaznika",
     order=order,
     dodge=0.4,
-    join=False,
+    linestyle='none',
     markers="d",
     palette='dark:black'
 )
@@ -676,7 +744,7 @@ df_final = df_struct.join(
     df_level[[
         "W_percentile",
         "W_zawod",
-        "W_fuzzy"
+        "W_fuzzy_pct"
     ]],
     how="inner"
 )
@@ -685,8 +753,8 @@ df_final = df_struct.join(
 # KONTROLA — FUZZY vs KLASTRY
 # =========================================
 
-print("\nW_fuzzy vs klastry:")
-print(df_final.groupby("cluster")["W_fuzzy"].mean())
+print("\nW_fuzzy_pct vs klastry:")
+print(df_final.groupby("cluster")["W_fuzzy_pct"].mean())
 
 print(df_final["W_percentile"].head())
 df_final["poziom"] = df_final["W_zawod"].apply(interpret_level)
@@ -704,6 +772,21 @@ df_model = df_final[df_final["zawod"] == MODE].copy()
 
 print(f"\nTryb analizy: {MODE}")
 print("Liczba obserwacji:", len(df_model))
+
+df_level = df_level[[
+    "zawod",
+    "stres",
+    "zmeczenie",
+    "kondycja",
+    "ciezkosc_pracy",
+    "halas",
+    "drgania",
+    "bol_total_w",
+    "W_percentile",
+    "W_fuzzy",
+    "W_fuzzy_pct",
+    "W_zawod"
+]]
 
 # =========================================
 # STEP 2.5 — WALIDACJA WSKAŹNIKA W
@@ -785,7 +868,7 @@ sns.pointplot(
     y="value",
     hue="index_type",
     dodge=0.4,
-    join=False,
+    linestyle='none',
     markers="d",
     palette='dark:black'
 )
