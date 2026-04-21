@@ -12,7 +12,7 @@ import scikit_posthocs as sp
 
 # ETAP 1 — Wczytanie i wstępna normalizacja
 
-df = pd.read_excel("dane.xlsx")
+df = pd.read_excel("EXept/dane.xlsx")
 
 # Podgląd
 print(df.head())
@@ -269,6 +269,17 @@ df_clean = df.loc[X.index].copy()
 df_clean["cluster"] = clusters
 
 print(df_clean["cluster"].value_counts())
+
+# =========================================
+# PREP FOR FUZZY (NIC NIE ZMIENIA)
+# =========================================
+
+df_clean["stres_raw"] = df_clean["stres"]
+df_clean["zmeczenie_raw"] = df_clean["zmeczenie"]
+df_clean["kondycja_raw"] = df_clean["kondycja"]
+df_clean["ciezkosc_raw"] = df_clean["ciezkosc_pracy"]
+df_clean["halas_raw"] = df_clean["halas"]
+df_clean["drgania_raw"] = df_clean["drgania"]
 
 # ETAP 12 — Boxploty (zbiorcze)
 
