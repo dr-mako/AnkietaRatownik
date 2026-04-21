@@ -314,6 +314,8 @@ print(pca_level.explained_variance_ratio_)
 loadings = pd.Series(pca_level.components_[0], index=features)
 print("\nŁadunki STEP 2:")
 print(loadings)
+print("\n=== INTERPRETACJA PCA (posortowane) ===")
+print(loadings.sort_values(ascending=False))
 
 if loadings.mean() < 0:
     W_raw = -W_raw
@@ -432,41 +434,24 @@ def compute_W_fuzzy(weights, alpha):
 
     for i in range(len(X_fuzzy)):
 
-        # =========================
-        # 🔵 BLOK MENTALNY (KLUCZ!)
-        # =========================
-
         stres_h = fuzzy_inputs["stres"]["high"].iloc[i]
         zmeczenie_h = fuzzy_inputs["zmeczenie"]["high"].iloc[i]
         kondycja_l = fuzzy_inputs["kondycja"]["low"].iloc[i]
 
-        # 🔴 SYNERGIA (KLUCZ!)
-        synergy = stres_h * zmeczenie_h
-
-        mental = (
-            weights["stres"] * stres_h +
-            weights["zmeczenie"] * zmeczenie_h +
-            weights["kondycja"] * kondycja_l +
-            2.0 * synergy
-        )
-
-        # =========================
-        # 🟠 BLOK FIZYCZNY (słabszy)
-        # =========================
-
-        physical = (
+        # fizyczny komponent (zostaje)
+        physical_h = (
             0.7 * fuzzy_inputs["ciezkosc_pracy"]["high"].iloc[i] +
             0.3 * fuzzy_inputs["halas"]["high"].iloc[i]
         )
 
-        # =========================
-        # 🔴 FINALNA KOMBINACJA
-        # =========================
-
-        val = np.power(0.9 * mental + 0.1 * physical, 1.8)
-
-        if synergy > 0.5:
-            val += 0.3
+        # 🔵 PROSTY MODEL (NOWY)
+        val = (
+            weights["stres"] * stres_h +
+            weights["zmeczenie"] * zmeczenie_h +
+            weights["kondycja"] * kondycja_l +
+            weights["ciezkosc_pracy"] * fuzzy_inputs["ciezkosc_pracy"]["high"].iloc[i] +
+            weights["halas"] * fuzzy_inputs["halas"]["high"].iloc[i]
+        )
 
         W.append(val)
 
@@ -477,6 +462,7 @@ alphas = np.linspace(0.1, 2.0, 20)
 
 results = []
 weights_dict = weights.to_dict()
+print(weights_dict)
 
 for a in alphas:
     W_tmp = compute_W_fuzzy(weights_dict, a)
@@ -539,7 +525,8 @@ print("weights:", best_w)
 W_fuzzy_final = compute_W_fuzzy(best_w, best_alpha)
 df_level["W_fuzzy"] = W_fuzzy_final
 df_level["W_fuzzy_pct"] = pd.Series(W_fuzzy_final).rank(pct=True)
-
+print("\n=== PCA vs FUZZY ===")
+print(df_level[["W_percentile", "W_fuzzy_pct"]].corr())
 
 # =========================================
 # KONTROLA — PCA vs FUZZY
@@ -560,6 +547,14 @@ df_check = df_struct.join(
 )
 
 print("\n=== KONTROLA KLASTRÓW ===")
+
+print("\n=== FINAL CHECK ===")
+
+print("\nŚrednie wartości zmiennych:")
+print(df_level[features].mean())
+
+print("\nŚredni W_percentile:", df_level["W_percentile"].mean())
+print("Średni W_fuzzy_pct:", df_level["W_fuzzy_pct"].mean())
 
 print("\nStres / zmęczenie / kondycja:")
 print(df_check.groupby("cluster")[["stres","zmeczenie","kondycja"]].mean())
@@ -586,6 +581,9 @@ features = ["stres", "zmeczenie", "kondycja", "ciezkosc_pracy", "halas", "drgani
 alpha = cronbach_alpha(df[features])
 
 print("\nCronbach alpha:", round(alpha, 3))
+print("\n=== CRONBACH ALPHA ===")
+alpha = cronbach_alpha(df[features])
+print("alpha:", round(alpha, 3))
 
 # =========================================
 # STEP 3 — BÓL vs OBCIĄŻENIE
