@@ -21,7 +21,7 @@ from sklearn.metrics import silhouette_score
 # STEP 0 — PRZYGOTOWANIE DANYCH (WSPÓLNE)
 # =========================================
 
-df = pd.read_excel("dane.xlsx")
+df = pd.read_excel("Exept\dane.xlsx")
 
 # --- normalizacja tekstu ---
 def normalize_text(x):
@@ -283,7 +283,6 @@ df_struct["cluster"] = clusters
 print("\nRozkład klastrów:")
 print(df_struct["cluster"].value_counts())
 
-
 # =========================================
 # STEP 2 — POZIOM (PCA + WSKAŹNIK)
 # =========================================
@@ -299,7 +298,7 @@ for col in X_level.columns:
 
 X_level = X_level.dropna()
 
-# standaryzacja między osobami
+# standaryzacja
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X_level)
 
@@ -319,9 +318,6 @@ if loadings.mean() < 0:
     W_raw = -W_raw
 
 W_raw = W_raw.flatten()
-
-# normalizacja 0–1
-W_norm = (W_raw - W_raw.min()) / (W_raw.max() - W_raw.min())
 
 # percentyle
 W_percentile = pd.Series(W_raw).rank(pct=True)
@@ -344,6 +340,168 @@ df_level["poziom"] = df_level["W_percentile"].apply(interpret_level)
 
 print("\nRozkład poziomów:")
 print(df_level["poziom"].value_counts())
+
+
+# =========================================
+# STEP 2C — FUZZY MODEL
+# =========================================
+
+print("\n==============================")
+print("=== STEP 2C — FUZZY MODEL ===")
+print("==============================")
+
+# =========================
+# FUNKCJE PRZYNALEŻNOŚCI
+# =========================
+
+def trapmf(x, a, b, c, d):
+    return np.maximum(0, np.minimum(
+        np.minimum((x - a) / (b - a + 1e-6), 1),
+        (d - x) / (d - c + 1e-6)
+    ))
+
+def trimf(x, a, b, c):
+    return np.maximum(0, np.minimum(
+        (x - a) / (b - a + 1e-6),
+        (c - x) / (c - b + 1e-6)
+    ))
+
+# =========================
+# NORMALIZACJA (ROBUST)
+# =========================
+
+X_fuzzy = X_level.copy()
+
+for col in X_fuzzy.columns:
+    q1 = X_fuzzy[col].quantile(0.05)
+    q9 = X_fuzzy[col].quantile(0.95)
+    X_fuzzy[col] = (X_fuzzy[col] - q1) / (q9 - q1)
+    X_fuzzy[col] = X_fuzzy[col].clip(0, 1)
+
+# =========================
+# MEMBERSHIP FUNCTIONS
+# =========================
+
+fuzzy_inputs = {}
+
+for col in X_fuzzy.columns:
+    x = X_fuzzy[col]
+
+    fuzzy_inputs[col] = {
+        "low": trapmf(x, 0.0, 0.0, 0.2, 0.4),
+        "medium": trimf(x, 0.2, 0.5, 0.8),
+        "high": trapmf(x, 0.6, 0.8, 1.0, 1.0)
+    }
+
+# wzmocnienie osi psychicznej
+fuzzy_inputs["stres"]["high"] = np.clip(fuzzy_inputs["stres"]["high"] * 1.2, 0, 1)
+fuzzy_inputs["zmeczenie"]["high"] = np.clip(fuzzy_inputs["zmeczenie"]["high"] * 1.2, 0, 1)
+
+# =========================
+# REGUŁY (SPÓJNE!)
+# =========================
+
+rules = []
+
+# 🔴 CORE — najważniejsze (PCA: stres + zmęczenie)
+rules.append(("high", np.sqrt(
+    fuzzy_inputs["stres"]["high"] *
+    fuzzy_inputs["zmeczenie"]["high"]
+)))
+
+# 🔴 PRZECIĄŻENIE FIZYCZNE
+rules.append(("high", fuzzy_inputs["ciezkosc_pracy"]["high"]))
+
+# 🟡 ŚREDNIE
+rules.append(("medium", np.sqrt(
+    fuzzy_inputs["zmeczenie"]["medium"] *
+    fuzzy_inputs["halas"]["medium"]
+)))
+
+# 🟢 OCHRONA
+rules.append(("low", np.sqrt(
+    fuzzy_inputs["kondycja"]["high"] *
+    fuzzy_inputs["stres"]["low"]
+)))
+
+# ⚪ FALLBACK (słaby!)
+rules.append(("medium", 0.3 * np.maximum.reduce([
+    fuzzy_inputs["stres"]["low"],
+    fuzzy_inputs["zmeczenie"]["low"],
+    fuzzy_inputs["kondycja"]["medium"]
+])))
+
+# 🔴 DODATKOWE (ważne!)
+rules.append(("high", 0.5 * np.sqrt(
+    fuzzy_inputs["kondycja"]["low"] *
+    fuzzy_inputs["zmeczenie"]["high"]
+)))
+
+# =========================
+# DEFUZYFIKACJA PER OSOBA
+# =========================
+
+W_fuzzy_individual = []
+
+for i in range(len(X_fuzzy)):
+
+    numerator = 0
+    denominator = 0
+
+    for label, strength in rules:
+
+        s = np.asarray(strength)[i]
+
+        if label == "low":
+            value = 0.3 * s
+        elif label == "medium":
+            value = 0.5 * s
+        elif label == "high":
+            value = 0.9 * s
+
+        numerator += value
+        denominator += s
+
+    if denominator == 0:
+        W_fuzzy_individual.append(0)
+    else:
+        W_fuzzy_individual.append(numerator / denominator)
+
+df_level["W_fuzzy"] = W_fuzzy_individual
+
+print("\nPodsumowanie W_fuzzy:")
+print(df_level["W_fuzzy"].describe())
+
+
+# =========================================
+# KONTROLA — PCA vs FUZZY
+# =========================================
+
+print("\n=== PCA vs FUZZY ===")
+print(df_level[["W_percentile", "W_fuzzy"]].corr())
+
+print("\nW_fuzzy vs klastry:")
+print(df_struct.join(df_level["W_fuzzy"]).groupby("cluster")["W_fuzzy"].mean())
+
+# =========================================
+# KONTROLA STRUKTURY KLASTRÓW (TU!)
+# =========================================
+
+df_check = df_struct.join(
+    df_level[["W_percentile","W_fuzzy"]]
+)
+
+print("\n=== KONTROLA KLASTRÓW ===")
+
+print("\nStres / zmęczenie / kondycja:")
+print(df_check.groupby("cluster")[["stres","zmeczenie","kondycja"]].mean())
+
+print("\nPCA vs fuzzy w klastrach:")
+print(df_check.groupby("cluster")[["W_percentile","W_fuzzy"]].mean())
+
+print("\nRóżnica fuzzy - PCA:")
+df_check["diff"] = df_check["W_fuzzy"] - df_check["W_percentile"]
+print(df_check.groupby("cluster")["diff"].mean())
 
 # =========================================
 # SPÓJNOŚĆ SKALI (CRONBACH ALPHA)
@@ -492,7 +650,7 @@ sns.pointplot(
     dodge=0.4,
     join=False,
     markers="d",
-    color="black"
+    palette='dark:black'
 )
 
 # usunięcie podwójnej legendy
@@ -515,9 +673,22 @@ plt.show()
 # =========================================
 
 df_final = df_struct.join(
-    df_level[["W_percentile", "W_zawod"]],
+    df_level[[
+        "W_percentile",
+        "W_zawod",
+        "W_fuzzy"
+    ]],
     how="inner"
 )
+
+# =========================================
+# KONTROLA — FUZZY vs KLASTRY
+# =========================================
+
+print("\nW_fuzzy vs klastry:")
+print(df_final.groupby("cluster")["W_fuzzy"].mean())
+
+print(df_final["W_percentile"].head())
 df_final["poziom"] = df_final["W_zawod"].apply(interpret_level)
 
 print("\nŚredni poziom obciążenia w klastrach:")
@@ -616,7 +787,7 @@ sns.pointplot(
     dodge=0.4,
     join=False,
     markers="d",
-    color="black"
+    palette='dark:black'
 )
 
 # naprawa legendy
@@ -642,8 +813,8 @@ import numpy as np
 # ETAP 1 — wczytanie danych
 # -------------------------
 
-emg = pd.read_csv("emg_key_metrics.csv")
-mio = pd.read_csv("myo_key_metrics.csv")
+emg = pd.read_csv("EXept/emg_key_metrics.csv")
+mio = pd.read_csv("EXept/myo_key_metrics.csv")
 
 print("\n=== EMG ===")
 print(emg.head())
@@ -679,23 +850,6 @@ print("W_emg (0-1):", W_emg)
 print("\n==============================")
 print("=== STEP 3 — INTEGRACJA ===")
 print("==============================")
-
-import pandas as pd
-import numpy as np
-
-# -------------------------
-# ETAP 1 — wczytanie CSV
-# -------------------------
-
-emg = pd.read_csv("emg_key_metrics.csv")
-mio = pd.read_csv("myo_key_metrics.csv")
-
-print("\n--- EMG ---")
-print(emg)
-
-print("\n--- MYOMOTION ---")
-print(mio.head())
-
 
 # -------------------------
 # ETAP 2 — EMG → wskaźnik
