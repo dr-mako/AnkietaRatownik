@@ -390,6 +390,31 @@ def validate(df_fuzzy, X_fuzzy):
         print("\n=== W vs BÓL ===")
         print(df_fuzzy[["W", "bol_total"]].corr())
 
+def plot_W_comparison(df_compare):
+
+    # sortowanie dla czytelności
+    df_sorted = df_compare.sort_values("W").reset_index(drop=True)
+
+    plt.figure()
+    plt.plot(df_sorted["W"].values, label="W (fuzzy)")
+    plt.plot(df_sorted["W_pca_norm"].values, label="W_pca_norm")
+
+    plt.title("Porównanie W vs W_pca_norm (per respondent)")
+    plt.xlabel("Respondenci (posortowani)")
+    plt.ylabel("Wartość wskaźnika")
+    plt.legend()
+    plt.show()  
+
+def plot_W_scatter(df_compare):
+
+    plt.figure()
+    plt.scatter(df_compare["W_pca_norm"], df_compare["W"])
+
+    plt.xlabel("W_pca_norm")
+    plt.ylabel("W (fuzzy)")
+    plt.title("W vs W_pca_norm (scatter)")
+    plt.show()
+
 
 # =========================================
 # MAIN
@@ -445,6 +470,8 @@ def main():
     validate(df_fuzzy, X_fuzzy)
     plot_results(df_fuzzy, X_fuzzy, df_struct)
 
+    plot_W_comparison(df_compare)
+    plot_W_scatter(df_compare)
 
 if __name__ == "__main__":
     main()
