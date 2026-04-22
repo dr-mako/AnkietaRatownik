@@ -159,93 +159,41 @@ def normalize_quantile(X):
     return X
 
 
-def compute_W(row):
+def compute_W(row, weights):
 
+    # fuzzyfikacja
     stres = sigmoid(row["stres"])
     zmeczenie = sigmoid(row["zmeczenie"])
     kondycja = sigmoid(row["kondycja"])
 
-    mental = 0.4 * stres + 0.4 * zmeczenie + 0.2 * kondycja
-    mental += 0.4 * stres * zmeczenie
+    ciezkosc = sigmoid(row["ciezkosc_pracy"])
+    halas = sigmoid(row["halas"])
 
-    physical = (
-        0.6 * sigmoid(row["ciezkosc_pracy"]) +
-        0.3 * sigmoid(row["halas"])
+    # komponent psychiczny (z wagami PCA)
+    mental = (
+        weights["stres"] * stres +
+        weights["zmeczenie"] * zmeczenie +
+        weights["kondycja"] * kondycja
     )
 
-    # 🔥 interakcja między blokami
-    interaction = 0.2 * zmeczenie * sigmoid(row["ciezkosc_pracy"])
+    # interakcja psychiczna (KLUCZOWA)
+    mental += 0.4 * stres * zmeczenie
 
-    W = np.power(0.7 * mental + 0.3 * physical + interaction, 1.0)
+    # komponent fizyczny
+    physical = (
+        weights["ciezkosc_pracy"] * ciezkosc +
+        weights["halas"] * halas
+    )
+
+    # interakcja między blokami
+    interaction = 0.2 * zmeczenie * ciezkosc
+
+    # agregacja
+    W = 0.7 * mental + 0.3 * physical + interaction
 
     return W
 
 
-# =========================================
-# MODEL GŁÓWNY
-# =========================================
-
-def build_model(df):
-
-    features = ["stres", "zmeczenie", "kondycja", "ciezkosc_pracy", "halas", "drgania"]
-
-    X = df[features].apply(pd.to_numeric, errors="coerce").dropna()
-
-    print("\n=== DIAGNOZA X ===")
-    print("shape:", X.shape)
-
-    print("\nNaN per kolumna:")
-    print(df[features].isna().sum())
-
-    print("\nUnikalne wartości:")
-    for col in features:
-        print(col, df[col].unique())
-
-    if X.shape[0] == 0:
-        raise ValueError("Brak danych po preprocessingu — sprawdź mapowanie wartości")
-
-    # PCA
-    pca = PCA()
-    X_pca = pca.fit_transform(X)
-
-    print("\nExplained variance:")
-    print(pca.explained_variance_ratio_)
-
-    # clustering
-    kmeans = KMeans(n_clusters=N_CLUSTERS, random_state=RANDOM_STATE, n_init=10)
-    clusters = kmeans.fit_predict(X_pca[:, :3])
-
-    print("\nSilhouette score:", silhouette_score(X_pca[:, :3], clusters))
-
-    df_struct = df.loc[X.index].copy()
-    df_struct["cluster"] = clusters
-
-    # fuzzy
-    X_fuzzy = X.copy()
-
-    # odwrócenie kondycji
-    X_fuzzy["kondycja"] = 5 - X_fuzzy["kondycja"]
-
-    X_fuzzy = normalize_quantile(X_fuzzy)
-
-    df_fuzzy = df.loc[X_fuzzy.index].copy()
-
-    df_fuzzy["W_raw"] = X_fuzzy.apply(compute_W, axis=1)
-
-    W = df_fuzzy["W_raw"]
-    df_fuzzy["W"] = (W - W.min()) / (W.max() - W.min() + 1e-6)
-
-    df_fuzzy["risk_level"] = pd.qcut(
-        df_fuzzy["W"],
-        q=4,
-        labels=["low", "moderate", "high", "critical"],
-        duplicates="drop"
-    )
-
-    print("\n=== ROZKŁAD RISK LEVEL ===")
-    print(df_fuzzy["risk_level"].value_counts())
-
-    return df_struct, df_fuzzy, X_fuzzy
 # =========================================
 # MODEL GŁÓWNY
 # =========================================
@@ -273,7 +221,7 @@ def build_model(df):
         print(col, df[col].unique())
 
     if X.shape[0] == 0:
-        raise ValueError("Brak danych po preprocessingu — sprawdź mapowanie wartości")
+        raise ValueError("Brak danych po preprocessingu")
 
     # =========================================
     # PCA
@@ -282,16 +230,35 @@ def build_model(df):
     pca = PCA()
     X_pca = pca.fit_transform(X)
 
+    # =========================================
+    # AUTO-WAGI (PCA 🔥)
+    # =========================================
+
+    loadings = pd.Series(pca.components_[0], index=features).abs()
+    weights = loadings / loadings.sum()
+
+    print("\n=== AUTO WAGI (PCA) ===")
+    print(weights.sort_values(ascending=False))
+
     print("\nExplained variance:")
     print(pca.explained_variance_ratio_)
 
-    # zapis PCA do df
+    # PCA → wskaźnik
     df_pca = df.loc[X.index].copy()
     df_pca["W_pca"] = X_pca[:, 0]
 
-    # normalizacja PCA (0–1)
     Wp = df_pca["W_pca"]
     df_pca["W_pca_norm"] = (Wp - Wp.min()) / (Wp.max() - Wp.min() + 1e-6)
+
+    # =========================================
+    # AUTO-WAGI (PCA 🔥)
+    # =========================================
+
+    loadings = pd.Series(pca.components_[0], index=features).abs()
+    weights = loadings / loadings.sum()
+
+    print("\n=== AUTO WAGI (PCA) ===")
+    print(weights.sort_values(ascending=False))
 
     # =========================================
     # KLASTRY
@@ -319,15 +286,14 @@ def build_model(df):
 
     df_fuzzy = df.loc[X_fuzzy.index].copy()
 
-    df_fuzzy["W_raw"] = X_fuzzy.apply(compute_W, axis=1)
+    # 🔥 TU JEST KLUCZOWA ZMIANA
+    df_fuzzy["W_raw"] = X_fuzzy.apply(lambda row: compute_W(row, weights), axis=1)
 
+    # normalizacja
     W = df_fuzzy["W_raw"]
     df_fuzzy["W"] = (W - W.min()) / (W.max() - W.min() + 1e-6)
 
-    # =========================================
-    # POZIOMY RYZYKA
-    # =========================================
-
+    # poziomy
     df_fuzzy["risk_level"] = pd.qcut(
         df_fuzzy["W"],
         q=4,
@@ -339,7 +305,7 @@ def build_model(df):
     print(df_fuzzy["risk_level"].value_counts())
 
     # =========================================
-    # PORÓWNANIE PCA vs FUZZY
+    # PCA vs FUZZY
     # =========================================
 
     df_compare = df_fuzzy[["W"]].join(
@@ -453,6 +419,17 @@ def main():
     print("\n=== NAJWIĘKSZE RÓŻNICE PCA vs FUZZY ===")
     print(df_compare.sort_values("diff", key=abs, ascending=False).head(10))
 
+
+    print("\n=== PEŁNA TABELA PCA vs FUZZY ===")
+    print(df_compare.head())
+
+    # zapis do pliku (bardzo przydatne do artykułu)
+    df_compare.to_csv("compare_W_full.csv", index=True)
+
+    print("\nZapisano pełną tabelę: compare_W_full.csv")
+
+    print("\n=== NAJWIĘKSZE RÓŻNICE PCA vs FUZZY ===")
+    print(df_compare.sort_values("diff", key=abs, ascending=False).head(10))
 
     # =========================
     # PCA vs FUZZY vs BÓL
