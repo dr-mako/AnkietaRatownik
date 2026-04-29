@@ -216,13 +216,62 @@ loadings = pd.DataFrame(
 
 print(loadings)
 
-# HEATMAPA
+# =========================================================
+# PCA LOADINGS HEATMAP (MDPI-STYLE)
+# =========================================================
 
-plt.figure(figsize=(10, 6))
-sns.heatmap(loadings, annot=True, cmap="coolwarm", center=0)
-plt.title("Macierz ładunków PCA")
+import matplotlib as mpl
+mpl.rcParams['axes.unicode_minus'] = True
+
+# English labels for variables
+feature_labels_en = {
+    "stres": "Stress",
+    "zmeczenie": "Fatigue",
+    "kondycja": "Condition",
+    "ciezkosc_pracy": "Workload",
+    "halas": "Noise",
+    "drgania": "Vibration"
+}
+
+loadings_plot = loadings.copy()
+loadings_plot.columns = [feature_labels_en.get(col, col) for col in loadings_plot.columns]
+
+# Unicode minus in annotations
+annot_labels = loadings_plot.copy()
+
+for col in annot_labels.columns:
+    annot_labels[col] = annot_labels[col].map(
+        lambda x: f"{x:.2f}".replace("-", "−") if pd.notnull(x) else ""
+    )
+
+plt.figure(figsize=(7.2, 5.2))
+
+sns.heatmap(
+    loadings_plot,
+    annot=annot_labels,
+    fmt="",
+    cmap="coolwarm",
+    center=0,
+    cbar_kws={"label": "Loading"}
+)
+
+plt.title("PCA loading matrix", fontsize=12)
+plt.xlabel("Variable", fontsize=11)
+plt.ylabel("Principal component", fontsize=11)
+
+plt.xticks(rotation=30, ha="right", fontsize=10)
+plt.yticks(fontsize=10)
+
 plt.tight_layout()
-#plt.show()
+
+plt.savefig(
+    "figure_pca_loadings.jpg",
+    format="jpg",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
 
 X_cluster = X_pca[:, :3]
 
@@ -356,28 +405,48 @@ features_plot = ["stres", "zmeczenie", "kondycja", "ciezkosc_pracy", "halas", "d
 
 fig, axes = plt.subplots(1, 2, figsize=(14,6))
 
+# =========================================================
+# FIGURE PUBLICATION-READY (MDPI STYLE)
+# =========================================================
+
+import matplotlib as mpl
+mpl.rcParams['axes.unicode_minus'] = True
+
+feature_labels_en = {
+    "stres": "Stress",
+    "zmeczenie": "Fatigue",
+    "kondycja": "Condition",
+    "ciezkosc_pracy": "Workload",
+    "halas": "Noise",
+    "drgania": "Vibration"
+}
+
 # ======================
-# PANEL A — BOXPLOT + PUNKTY
+# PANEL A — BOXPLOT + POINTS
 # ======================
 
 df_melt = df_clean.melt(
     id_vars="cluster",
     value_vars=features_plot,
-    var_name="zmienna",
-    value_name="wartosc"
+    var_name="variable",
+    value_name="value"
 )
 
+df_melt["variable"] = df_melt["variable"].map(feature_labels_en)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
 sns.boxplot(
-    x="zmienna",
-    y="wartosc",
+    x="variable",
+    y="value",
     hue="cluster",
     data=df_melt,
     ax=axes[0]
 )
 
 sns.stripplot(
-    x="zmienna",
-    y="wartosc",
+    x="variable",
+    y="value",
     hue="cluster",
     data=df_melt,
     dodge=True,
@@ -385,15 +454,16 @@ sns.stripplot(
     ax=axes[0]
 )
 
-axes[0].set_title("A. Rozkład zmiennych w klastrach")
-axes[0].tick_params(axis='x', rotation=45)
+axes[0].set_title("A. Variable distributions across clusters", fontsize=11)
+axes[0].set_xlabel("Variable", fontsize=10)
+axes[0].set_ylabel("Response", fontsize=10)
+axes[0].tick_params(axis='x', rotation=35, labelsize=9)
 
-# usuwamy podwójną legendę
 handles, labels = axes[0].get_legend_handles_labels()
-axes[0].legend(handles[:4], labels[:4], title="Cluster")
+axes[0].legend(handles[:4], labels[:4], title="Cluster", fontsize=9)
 
 # ======================
-# PANEL B — HEATMAPA PROFILI
+# PANEL B — CLUSTER PROFILE HEATMAP
 # ======================
 
 cluster_means = (
@@ -404,18 +474,36 @@ cluster_means = (
     .mean()
 )
 
+cluster_means.columns = [feature_labels_en.get(col, col) for col in cluster_means.columns]
+
+annot_labels = cluster_means.copy()
+
+for col in annot_labels.columns:
+    annot_labels[col] = annot_labels[col].map(
+        lambda x: f"{x:.2f}".replace("-", "−") if pd.notnull(x) else ""
+    )
+
 sns.heatmap(
     cluster_means,
-    annot=True,
+    annot=annot_labels,
+    fmt="",
     cmap="coolwarm",
     ax=axes[1]
 )
 
-axes[1].set_title("B. Profil klastrów (średnie wartości)")
+axes[1].set_title("B. Cluster profiles (mean values)", fontsize=11)
+axes[1].set_xlabel("Variable", fontsize=10)
+axes[1].set_ylabel("Cluster", fontsize=10)
 
 plt.tight_layout()
-plt.show()
 
+plt.savefig(
+    "figure_cluster_profiles_combined.jpg",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
 
 # ETAP 13 — ANALIZA ZAWODÓW
 
@@ -433,6 +521,60 @@ plt.title("Struktura zawodów w klastrach")
 plt.ylabel("udział")
 plt.tight_layout()
 #plt.show()
+
+# =========================================================
+# ETAP 13 — OCCUPATIONAL STRUCTURE BY CLUSTER (MDPI STYLE)
+# =========================================================
+
+zawod_cluster = pd.crosstab(
+    df_clean["zawod"],
+    df_clean["cluster"],
+    normalize="columns"
+)
+
+print("\nOccupational structure across clusters:")
+print(zawod_cluster)
+
+occupation_labels_en = {
+    "kierowca": "Driver",
+    "maszynista": "Train operator",
+    "ratownik": "Paramedic"
+}
+
+zawod_cluster.index = [
+    occupation_labels_en.get(idx, idx)
+    for idx in zawod_cluster.index
+]
+
+ax = zawod_cluster.T.plot(
+    kind="bar",
+    stacked=True,
+    figsize=(6.2, 4.2)
+)
+
+plt.title("Occupational structure across clusters", fontsize=11)
+plt.xlabel("Cluster", fontsize=10)
+plt.ylabel("Share", fontsize=10)
+
+plt.xticks(rotation=0, fontsize=9)
+plt.yticks(fontsize=9)
+
+plt.legend(
+    title="Occupation",
+    fontsize=9,
+    title_fontsize=9,
+    frameon=True
+)
+
+plt.tight_layout()
+
+plt.savefig(
+    "figure_occupation_structure.jpg",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
 
 # ETAP 13.5 — czyszczenie płci
 
@@ -474,8 +616,61 @@ plec_cluster.T.plot(kind="bar", stacked=True, figsize=(6,4))
 plt.title("Struktura płci w klastrach")
 plt.ylabel("udział")
 plt.tight_layout()
-plt.show()
+#plt.show()
 
+
+# =========================================================
+# ETAP 14 — GENDER STRUCTURE BY CLUSTER (MDPI STYLE)
+# =========================================================
+
+plec_cluster = pd.crosstab(
+    df_clean["plec"],
+    df_clean["cluster"],
+    normalize="columns"
+)
+
+print("\nGender structure across clusters:")
+print(plec_cluster)
+
+gender_labels_en = {
+    "kobieta": "Female",
+    "mężczyzna": "Male"
+}
+
+plec_cluster.index = [
+    gender_labels_en.get(idx, idx)
+    for idx in plec_cluster.index
+]
+
+ax = plec_cluster.T.plot(
+    kind="bar",
+    stacked=True,
+    figsize=(5.8, 4.0)
+)
+
+plt.title("Gender structure across clusters", fontsize=11)
+plt.xlabel("Cluster", fontsize=10)
+plt.ylabel("Share", fontsize=10)
+
+plt.xticks(rotation=0, fontsize=9)
+plt.yticks(fontsize=9)
+
+plt.legend(
+    title="Gender",
+    fontsize=9,
+    title_fontsize=9,
+    frameon=True
+)
+
+plt.tight_layout()
+
+plt.savefig(
+    "figure_gender_structure.jpg",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.show()
 
 # =========================
 # ROZGAŁĘZIENIE ZAWODÓW
