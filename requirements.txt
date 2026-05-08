@@ -14,3 +14,4 @@ seaborn
 xlrd
 scikit-posthocs
 factor_analyzer
+requirements.txt

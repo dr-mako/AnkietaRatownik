@@ -1,3 +1,5 @@
+# step1_load_clean.py
+
 import pandas as pd
 import re
 import numpy as np
@@ -192,8 +194,8 @@ plt.figure(figsize=(6,4))
 
 plt.plot(range(1, len(explained_var)+1), explained_var, marker='o')
 plt.xlabel("Principal Component")
-plt.ylabel("Explained Variance Ratio")
-plt.title("Scree Plot of Principal Components")
+plt.ylabel("Explained Variance")
+plt.title("Explained Variance of Structural PCA Components")
 
 plt.xticks(range(1, len(explained_var)+1))
 
